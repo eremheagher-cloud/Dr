@@ -1,0 +1,289 @@
+
+name: PC criado pelo @alves7.pcm
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_number:
+        description: 'Instance Number (1-10)'
+        required: true
+        default: '1'
+        type: string
+
+jobs:
+  deploy-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: System Information
+        shell: pwsh
+        run: |
+          Write-Host "=== ENIGMANO RDP DEPLOYMENT ===" -ForegroundColor Green
+          Write-Host "Nome: rafael" -ForegroundColor Green
+          Write-Host "Instance Number: ${{ inputs.instance_number }}" -ForegroundColor Yellow
+          Write-Host "Runner: $env:RUNNER_NAME" -ForegroundColor Yellow
+          Write-Host "Workflow: $env:GITHUB_WORKFLOW" -ForegroundColor Yellow
+          Write-Host "Identificador: rafael37464" -ForegroundColor Green
+          Write-Host "Nome desejado do PC: Eva" -ForegroundColor Green
+
+          Write-Host "`n=== SYSTEM SPECIFICATIONS ===" -ForegroundColor Cyan
+
+          Get-ComputerInfo |
+            Select-Object WindowsProductName, WindowsVersion, OsArchitecture
+
+          Get-CimInstance Win32_ComputerSystem |
+            Select-Object Name, TotalPhysicalMemory
+
+          Get-CimInstance Win32_Processor |
+            Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name, Used, Free
+
+          Write-Host "Memoria e disco dependem do runner do GitHub." -ForegroundColor Yellow
+
+      - name: Enable RDP Check
+        shell: pwsh
+        run: |
+          Write-Host "=== REMOTE DESKTOP CHECK ===" -ForegroundColor Green
+
+          $rdpPath = 'HKLM:\System\CurrentControlSet\Control\Terminal Server'
+
+          if (Test-Path $rdpPath) {
+            $rdpStatus = Get-ItemProperty `
+              -Path $rdpPath `
+              -Name fDenyTSConnections
+
+            Write-Host "Configuracao RDP: $($rdpStatus.fDenyTSConnections)" -ForegroundColor Yellow
+          }
+
+          Write-Host "Esta etapa verifica a configuracao, mas nao abre acesso RDP externo." -ForegroundColor Yellow
+
+      - name: Create User Account
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "=== CRIANDO CONTA LOCAL ===" -ForegroundColor Green
+
+          $Username = 'rafael'
+          $Password = 'SuaSenhaAqui123!'
+
+          Write-Host "Nome: $Username" -ForegroundColor Green
+          Write-Host "Identificador: rafael37464" -ForegroundColor Green
+          Write-Host "Nome desejado do PC: Eva" -ForegroundColor Green
+
+          try {
+            $User = Get-LocalUser `
+              -Name $Username `
+              -ErrorAction SilentlyContinue
+
+            $SecurePassword = ConvertTo-SecureString `
+              $Password `
+              -AsPlainText `
+              -Force
+
+            if ($null -eq $User) {
+              New-LocalUser `
+                -Name $Username `
+                -Password $SecurePassword `
+                -Description "Conta local rafael" |
+                Out-Null
+
+              Write-Host "Conta rafael criada com sucesso." -ForegroundColor Green
+            }
+            else {
+              Set-LocalUser `
+                -Name $Username `
+                -Password $SecurePassword
+
+              Write-Host "Conta rafael ja existia; senha atualizada." -ForegroundColor Green
+            }
+
+            Write-Host "A senha foi configurada, mas nao sera impressa nos logs." -ForegroundColor Yellow
+
+            $OriginalUser = Get-LocalUser `
+              -Name 'runneradmin' `
+              -ErrorAction SilentlyContinue
+
+            if ($null -ne $OriginalUser) {
+              Write-Host "A conta runneradmin existe." -ForegroundColor Green
+            }
+            else {
+              Write-Host "A conta runneradmin nao existe neste runner." -ForegroundColor Yellow
+            }
+          }
+          finally {
+            Remove-Variable Password, SecurePassword `
+              -ErrorAction SilentlyContinue
+          }
+
+      - name: Install Tailscale
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "Downloading Tailscale..." -ForegroundColor Green
+
+          $tsUrl = 'https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi'
+          $installerPath = Join-Path $env:TEMP 'tailscale.msi'
+
+          try {
+            Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+
+            $process = Start-Process `
+              -FilePath 'msiexec.exe' `
+              -ArgumentList "/i `"$installerPath`" /quiet /norestart" `
+              -Wait `
+              -PassThru
+
+            if ($process.ExitCode -notin @(0, 3010)) {
+              throw "A instalacao do Tailscale falhou. Codigo: $($process.ExitCode)"
+            }
+
+            Write-Host "Tailscale instalado." -ForegroundColor Green
+          }
+          finally {
+            if (Test-Path $installerPath) {
+              Remove-Item $installerPath -Force
+            }
+          }
+
+      - name: Check Tailscale Configuration
+        shell: pwsh
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $tsExe = 'C:\Program Files\Tailscale\tailscale.exe'
+
+          Write-Host "=== TAILSCALE CONFIGURATION ===" -ForegroundColor Green
+
+          if (-not (Test-Path $tsExe)) {
+            Write-Host "Tailscale nao foi encontrado." -ForegroundColor Yellow
+          }
+          elseif ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            Write-Host "O segredo TAILSCALE_AUTH_KEY nao esta configurado." -ForegroundColor Yellow
+          }
+          else {
+            Write-Host "O segredo TAILSCALE_AUTH_KEY foi encontrado." -ForegroundColor Green
+            Write-Host "A chave nao sera exibida nos logs." -ForegroundColor Green
+            Write-Host "Esta etapa nao autentica o Tailscale." -ForegroundColor Yellow
+          }
+
+          Remove-Item Env:TAILSCALE_AUTH_KEY -ErrorAction SilentlyContinue
+
+      - name: Get Tailscale Status
+        shell: pwsh
+        run: |
+          Write-Host "Checking Tailscale status..." -ForegroundColor Green
+
+          $tsExe = 'C:\Program Files\Tailscale\tailscale.exe'
+
+          if (Test-Path $tsExe) {
+            & $tsExe status
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Tailscale ainda nao esta conectado." -ForegroundColor Yellow
+            }
+          }
+          else {
+            Write-Host "Tailscale nao esta instalado." -ForegroundColor Yellow
+          }
+
+          Write-Host "O IP depende de uma conexao autenticada." -ForegroundColor Yellow
+
+      - name: Install Google Chrome
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "Downloading Google Chrome..." -ForegroundColor Green
+
+          $chromeUrl = 'https://dl.google.com/chrome/install/latest/chrome_installer.exe'
+          $installerPath = Join-Path $env:TEMP 'chrome_installer.exe'
+
+          try {
+            Invoke-WebRequest -Uri $chromeUrl -OutFile $installerPath
+
+            $process = Start-Process `
+              -FilePath $installerPath `
+              -ArgumentList '/silent /install' `
+              -Wait `
+              -PassThru
+
+            if ($process.ExitCode -ne 0) {
+              throw "A instalacao do Chrome falhou. Codigo: $($process.ExitCode)"
+            }
+
+            Write-Host "Google Chrome instalado." -ForegroundColor Green
+          }
+          finally {
+            if (Test-Path $installerPath) {
+              Remove-Item $installerPath -Force
+            }
+          }
+
+      - name: Install 7-Zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "Downloading 7-Zip..." -ForegroundColor Green
+
+          $zipUrl = 'https://www.7-zip.org/a/7z2409-x64.exe'
+          $installerPath = Join-Path $env:TEMP '7z-installer.exe'
+
+          try {
+            Invoke-WebRequest -Uri $zipUrl -OutFile $installerPath
+
+            $process = Start-Process `
+              -FilePath $installerPath `
+              -ArgumentList '/S' `
+              -Wait `
+              -PassThru
+
+            if ($process.ExitCode -ne 0) {
+              throw "A instalacao do 7-Zip falhou. Codigo: $($process.ExitCode)"
+            }
+
+            Write-Host "7-Zip instalado." -ForegroundColor Green
+          }
+          finally {
+            if (Test-Path $installerPath) {
+              Remove-Item $installerPath -Force
+            }
+          }
+
+      - name: Connection Details
+        shell: pwsh
+        run: |
+          Write-Host "`n=== CONNECTION DETAILS ===" -ForegroundColor Green
+          Write-Host "Nome: rafael" -ForegroundColor Green
+          Write-Host "Workflow: $env:GITHUB_WORKFLOW" -ForegroundColor Green
+          Write-Host "Instance Number: ${{ inputs.instance_number }}" -ForegroundColor Green
+          Write-Host "Identificador: rafael37464" -ForegroundColor Green
+          Write-Host "Nome desejado do PC: Eva" -ForegroundColor Green
+          Write-Host "Usuario: rafael" -ForegroundColor Green
+
+          Write-Host "`n=== CONNECTION STATUS ===" -ForegroundColor Yellow
+          Write-Host "Este workflow nao fornece um endereco RDP remoto funcional." -ForegroundColor Yellow
+          Write-Host "A senha nao sera impressa nos logs." -ForegroundColor Yellow
+          Write-Host "O runner sera descartado ao terminar o job." -ForegroundColor Yellow
+
+      - name: Keep Session Alive
+        shell: pwsh
+        run: |
+          Write-Host "`n=== SESSION CHECK ===" -ForegroundColor Green
+
+          for ($counter = 1; $counter -le 3; $counter++) {
+            Write-Host "Verificacao #$counter - $(Get-Date)" -ForegroundColor Green
+            Start-Sleep -Seconds 5
+          }
+
+          Write-Host "Verificacoes concluidas." -ForegroundColor Green
+          Write-Host "O job terminara normalmente." -ForegroundColor Yellow
+          
